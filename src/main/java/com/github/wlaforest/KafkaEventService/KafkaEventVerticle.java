@@ -50,8 +50,8 @@ public class KafkaEventVerticle extends AbstractVerticle  {
         .end("<h1>OK</h1>");
     });
 
-    router.route("/topics/:topic/beginning").handler(this::seekToBeginning);
-    router.route("/topics/:topic").handler(this::nextTopicMessages);
+    router.route("/topic/:topic/beginning").handler(this::seekToBeginning);
+    router.route("/topic/:topic").handler(this::nextTopicMessages);
     router.route("/*").handler(
       StaticHandler.create(config().getString("kafkaevent.static.path", "static")));
 
