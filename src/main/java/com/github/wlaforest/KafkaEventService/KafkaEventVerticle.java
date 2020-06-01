@@ -50,6 +50,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
         .end("<h1>OK</h1>");
     });
 
+    router.route("/topic/:topic/sse").handler(this::sseTopicMessages);
     router.route("/topic/:topic/beginning").handler(this::seekToBeginning);
     router.route("/topic/:topic").handler(this::nextTopicMessages);
     router.route("/*").handler(
@@ -92,6 +93,34 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     kc.seekToBeginning(kc.assignment());
     response.end("<h1>ok</h1>");
   }
+
+  private void sseTopicMessages(RoutingContext rc)
+  {
+    System.out.println("sseTopicMessages");
+    HttpServerResponse response = rc.response();
+    KafkaConsumer kc;
+
+    try {
+      kc = getConsumer(rc);
+    } catch (MissingParameterException e) {
+      rc.response().setStatusCode(500).end(e.getMessage());
+      return;
+    }
+
+    response.setChunked(true);
+    response.putHeader("Content-Type", "text/event-stream");
+    response.putHeader("Connection", "keep-alive");
+    response.putHeader("Cache-Control", "no-cache");
+
+    vertx.setPeriodic(1000, timer -> {
+        ConsumerRecords<String, String> records = kc.poll(100);
+        System.out.println("polled and got back " + records.count() + " records");
+        for (ConsumerRecord<String, String> r: records) {
+          response.write("data: " + r.value() + "\n\n");
+        }
+      });
+  }
+
 
   private void nextTopicMessages(RoutingContext rc)
   {
