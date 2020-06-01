@@ -17,7 +17,6 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.Properties;
 
 public class KafkaEventVerticle extends AbstractVerticle  {
@@ -51,7 +50,8 @@ public class KafkaEventVerticle extends AbstractVerticle  {
         .end("<h1>OK</h1>");
     });
 
-    router.route("/topics/:topic").handler(this::blockingNextTopicMessage);
+    router.route("/topics/:topic/beginning").handler(this::seekToBeginning);
+    router.route("/topics/:topic").handler(this::nextTopicMessages);
     router.route("/*").handler(
       StaticHandler.create(config().getString("kafkaevent.static.path", "static")));
 
@@ -78,26 +78,31 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     stopPromise.complete();
   }
 
-  private void blockingNextTopicMessage(RoutingContext rc)
-  {
-    HttpServerRequest request = rc.request();
+  private void seekToBeginning(RoutingContext rc) {
     HttpServerResponse response = rc.response();
+    KafkaConsumer kc;
 
-    String topic = request.getParam("topic");
-
-    if (topic  == null)
-    {
-      rc.response().setStatusCode(500).end("Bad topic");
+    try {
+      kc = getConsumer(rc);
+    } catch (MissingParameterException e) {
+      rc.response().setStatusCode(500).end(e.getMessage());
       return;
     }
+    kc.poll(POLL_TIMEOUT);
+    kc.seekToBeginning(kc.assignment());
+    response.end("<h1>ok</h1>");
+  }
 
-    KafkaConsumer<String,String> kc = consumers.get(topic);
-    if (kc == null)
-    {
-      kafkaProperties.put("group.id", topic);
-      kc = new KafkaConsumer<String, String>(kafkaProperties);
-      kc.subscribe(Arrays.asList(topic));
-      consumers.put(topic, kc);
+  private void nextTopicMessages(RoutingContext rc)
+  {
+    HttpServerResponse response = rc.response();
+    KafkaConsumer kc;
+
+    try {
+      kc = getConsumer(rc);
+    } catch (MissingParameterException e) {
+      rc.response().setStatusCode(500).end(e.getMessage());
+      return;
     }
 
     StringBuffer sb = new StringBuffer();
@@ -118,44 +123,31 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     response.end(sb.toString());
   }
 
-//  private void getNextTopicMessage(RoutingContext rc)
-//  {
-//    HttpServerRequest request = rc.request();
-//    String topic = request.getParam("topic");
-//    Future f = Future.future(promise -> {
-//      if (consumers.get(topic) == null) {
-//        System.out.println("consumer is null");
-//        consumers.put(topic, KafkaConsumer.create(vertx, kafkaProperties));
-//        System.out.println("createed consumer " + consumers.get(topic));
-//      }
-//    }).compose(v -> {
-//      return Future.future(promise -> {
-//        System.out.println("about to create consumer");
-//        KafkaConsumer<String, String> kc = consumers.get(topic);
-//        System.out.println("created consumer");
-//        kc.subscribe(topic);
-//      });
-//    }).compose(v -> {
-//      return Future.future(promise -> {
-//        System.out.println("about to get messages");
-//        KafkaConsumer<String, String> kc = consumers.get(topic);
-//        System.out.println("about to poll");
-//        kc.poll(100, ar -> {
-//          if (ar.succeeded()) {
-//            KafkaConsumerRecords<String,String> kcr = ar.result();
-//            ConsumerRecords<String, String> records = kcr.records();
-//            for (ConsumerRecord<String,String> c: records)
-//            {
-//              System.out.println(c.value());
-//            }
-//          }
-//        });
-//      });
-//    });
-//    f.handle(AsyncReult ar ->{
-//      ar.failed();
-//    });
-//    System.out.println(topic);
-//    rc.response().end();
-//  }
+  private KafkaConsumer getConsumer(RoutingContext rc) throws MissingParameterException {
+    HttpServerRequest request = rc.request();
+    HttpServerResponse response = rc.response();
+
+    String topic = request.getParam("topic");
+
+    if (topic  == null)
+      throw new MissingParameterException("Missing topic parameter");
+
+
+    KafkaConsumer<String,String> kc = consumers.get(topic);
+    if (kc == null)
+    {
+      kafkaProperties.put("group.id", topic);
+      kc = new KafkaConsumer<String, String>(kafkaProperties);
+      kc.subscribe(Arrays.asList(topic));
+      consumers.put(topic, kc);
+      return kc;
+    }
+    else return kc;
+  }
+
+  private class MissingParameterException extends Throwable {
+    public MissingParameterException(String missiong_topic_parameter) {
+      super(missiong_topic_parameter);
+    }
+  }
 }
