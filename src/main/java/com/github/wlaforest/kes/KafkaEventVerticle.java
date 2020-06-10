@@ -13,6 +13,8 @@ import io.vertx.ext.web.Router;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 
 import java.util.Arrays;
@@ -28,17 +30,26 @@ public class KafkaEventVerticle extends AbstractVerticle  {
       "]}";
   private final static long POLL_TIMEOUT = 100;
 
-  private HashMap<String, KafkaConsumer<String, String>> consumers = new HashMap();
-  private Properties kafkaProperties = new Properties();
+  private final HashMap<String, KafkaConsumer<String, String>> consumers = new HashMap();
+  private  KafkaProducer<String, String> kafkaProducer;
+
+  private final Properties baseKafkaProperties = new Properties();
+  private Properties baseConsumerProperties;
+  private Properties baseProducerProperties;
 
   @Override
   public void start(Promise<Void> startPromise) throws Exception {
 
-    kafkaProperties.put("bootstrap.servers", config().getString("kafkaevent.source.broker.address", "localhost:9092"));
-    kafkaProperties.put("key.deserializer", config().getString("kafkaevent.key.deserializer", StringDeserializer.class.getName()));
-    kafkaProperties.put("value.deserializer", config().getString("kafkaevent.value.deserializer", StringDeserializer.class.getName()));
-    kafkaProperties.put("auto.offset.reset", "earliest");
-    kafkaProperties.put("enable.auto.commit", "true");
+    baseKafkaProperties.put("bootstrap.servers", config().getString("kafkaevent.source.broker.address", "localhost:9092"));
+    baseKafkaProperties.put("key.deserializer", config().getString("kafkaevent.key.deserializer", StringDeserializer.class.getName()));
+    baseKafkaProperties.put("value.deserializer", config().getString("kafkaevent.value.deserializer", StringDeserializer.class.getName()));
+
+    baseConsumerProperties = new Properties(baseKafkaProperties);
+    baseConsumerProperties.put("auto.offset.reset", "earliest");
+    baseConsumerProperties.put("enable.auto.commit", "true");
+
+    baseProducerProperties = new Properties(baseKafkaProperties);
+    kafkaProducer = new KafkaProducer<String, String>(baseProducerProperties);
 
     int bindPort = config().getInteger("kafkaevent.http.port", 8080);
     Router router = Router.router(vertx);
@@ -53,6 +64,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     router.route("/topic/:topic/sse").handler(this::sseTopicMessages);
     router.route("/topic/:topic/beginning").handler(this::seekToBeginning);
     router.route("/topic/:topic").handler(this::nextTopicMessages);
+    router.route("/topic/:topic/pub").handler(this::publishMessages);
     router.route("/*").handler(
       StaticHandler.create(config().getString("kafkaevent.static.path", "static")));
 
@@ -76,7 +88,23 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     for (KafkaConsumer c : consumers.values()) {
       c.close();
     }
+    kafkaProducer.close();
     stopPromise.complete();
+  }
+
+  private void publishMessages(RoutingContext rc) throws MissingParameterException {
+
+    String body = rc.getBodyAsString();
+    String topic = rc.request().getParam("topic");
+
+    if (body == null || body.equals(""))
+      rc.response().setStatusCode(500).end("No body");
+
+    if (topic == null)
+      rc.response().setStatusCode(500).end("Missing topic parameter");
+
+    ProducerRecord<String, String> pr = new ProducerRecord(topic, Long.toString(System.currentTimeMillis()), body);
+    kafkaProducer.send(pr);
   }
 
   private void seekToBeginning(RoutingContext rc) {
@@ -165,8 +193,9 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     KafkaConsumer<String,String> kc = consumers.get(topic);
     if (kc == null)
     {
-      kafkaProperties.put("group.id", topic);
-      kc = new KafkaConsumer<String, String>(kafkaProperties);
+      Properties props = new Properties(baseConsumerProperties);
+      props.put("group.id", topic);
+      kc = new KafkaConsumer<String, String>(props);
       kc.subscribe(Arrays.asList(topic));
       consumers.put(topic, kc);
       return kc;

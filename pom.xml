@@ -19,7 +19,7 @@
     <vertx.version>3.9.1</vertx.version>
     <junit-jupiter.version>5.4.0</junit-jupiter.version>
 
-    <main.verticle>com.github.wlaforest.KafkaEventService.KafkaEventVerticle</main.verticle>
+    <main.verticle>com.github.wlaforest.kes.KafkaEventVerticle</main.verticle>
   </properties>
 
   <dependencyManagement>
@@ -42,7 +42,7 @@
     <dependency>
       <groupId>io.vertx</groupId>
       <artifactId>vertx-web</artifactId>
-      <version>3.0.0</version>
+      <version>3.9.1</version>
     </dependency>
     <dependency>
       <groupId>io.vertx</groupId>
