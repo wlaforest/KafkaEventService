@@ -1,4 +1,4 @@
-package com.github.wlaforest.KafkaEventService;
+package com.github.wlaforest.kes;
 
 
 import io.vertx.core.AbstractVerticle;
@@ -8,6 +8,7 @@ import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.StaticHandler;
 import io.vertx.ext.web.Router;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -16,6 +17,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -33,26 +35,41 @@ public class KafkaEventVerticle extends AbstractVerticle  {
   private final HashMap<String, KafkaConsumer<String, String>> consumers = new HashMap();
   private  KafkaProducer<String, String> kafkaProducer;
 
-  private final Properties baseKafkaProperties = new Properties();
-  private Properties baseConsumerProperties;
-  private Properties baseProducerProperties;
+
+  private Properties consumerProps;
+  private Properties producerProps;
 
   @Override
   public void start(Promise<Void> startPromise) throws Exception {
 
-    baseKafkaProperties.put("bootstrap.servers", config().getString("kafkaevent.source.broker.address", "localhost:9092"));
-    baseKafkaProperties.put("key.deserializer", config().getString("kafkaevent.key.deserializer", StringDeserializer.class.getName()));
-    baseKafkaProperties.put("value.deserializer", config().getString("kafkaevent.value.deserializer", StringDeserializer.class.getName()));
+    String bootstrapServers = config().getString("kafkaevent.source.broker.address", "localhost:9092");
 
-    baseConsumerProperties = new Properties(baseKafkaProperties);
-    baseConsumerProperties.put("auto.offset.reset", "earliest");
-    baseConsumerProperties.put("enable.auto.commit", "true");
+    consumerProps = new Properties();
+    consumerProps.put("bootstrap.servers", bootstrapServers);
+    consumerProps.put("auto.offset.reset", "earliest");
+    consumerProps.put("enable.auto.commit", "true");
+    consumerProps.put("key.deserializer", config().getString("kafkaevent.key.deserializer", StringDeserializer.class.getName()));
+    consumerProps.put("value.deserializer", config().getString("kafkaevent.value.deserializer", StringDeserializer.class.getName()));
 
-    baseProducerProperties = new Properties(baseKafkaProperties);
-    kafkaProducer = new KafkaProducer<String, String>(baseProducerProperties);
+    producerProps = new Properties();
+    producerProps.put("bootstrap.servers", bootstrapServers);
+    producerProps.put("key.serializer", config().getString("kafkaevent.key.serializer", StringSerializer.class.getName()));
+    producerProps.put("value.serializer", config().getString("kafkaevent.value.serializer", StringSerializer.class.getName()));
+
+
+    try {
+      kafkaProducer = new KafkaProducer<String, String>(producerProps);
+    }
+    catch (Exception e)
+    {
+      startPromise.fail(e);
+      return;
+    }
 
     int bindPort = config().getInteger("kafkaevent.http.port", 8080);
     Router router = Router.router(vertx);
+    router.route("/topic/:topic/pub").handler( context -> { context.request().setExpectMultipart(false);});
+    router.route("/topic/:topic/pub").handler(BodyHandler.create());
 
     router.route("/status").handler(  routingContext -> {
       HttpServerResponse response = routingContext.response();
@@ -61,10 +78,15 @@ public class KafkaEventVerticle extends AbstractVerticle  {
         .end("<h1>OK</h1>");
     });
 
+    // Route for server side events
     router.route("/topic/:topic/sse").handler(this::sseTopicMessages);
+    // Route for resetting consumer to beginning
     router.route("/topic/:topic/beginning").handler(this::seekToBeginning);
+    // Route for getting the next messages in the topic
     router.route("/topic/:topic").handler(this::nextTopicMessages);
+    //route for publishing a message
     router.route("/topic/:topic/pub").handler(this::publishMessages);
+    // route for static resources
     router.route("/*").handler(
       StaticHandler.create(config().getString("kafkaevent.static.path", "static")));
 
@@ -92,16 +114,16 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     stopPromise.complete();
   }
 
-  private void publishMessages(RoutingContext rc) throws MissingParameterException {
+  private void publishMessages(RoutingContext rc) {
 
     String body = rc.getBodyAsString();
     String topic = rc.request().getParam("topic");
 
     if (body == null || body.equals(""))
-      rc.response().setStatusCode(500).end("No body");
+      rc.response().setStatusCode(400).end("No body provided with request");
 
     if (topic == null)
-      rc.response().setStatusCode(500).end("Missing topic parameter");
+      rc.response().setStatusCode(400).end("Missing topic parameter");
 
     ProducerRecord<String, String> pr = new ProducerRecord(topic, Long.toString(System.currentTimeMillis()), body);
     kafkaProducer.send(pr);
@@ -114,7 +136,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     try {
       kc = getConsumer(rc);
     } catch (MissingParameterException e) {
-      rc.response().setStatusCode(500).end(e.getMessage());
+      rc.response().setStatusCode(400).end(e.getMessage());
       return;
     }
     kc.poll(POLL_TIMEOUT);
@@ -131,7 +153,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     try {
       kc = getConsumer(rc);
     } catch (MissingParameterException e) {
-      rc.response().setStatusCode(500).end(e.getMessage());
+      rc.response().setStatusCode(400).end(e.getMessage());
       return;
     }
 
@@ -158,7 +180,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     try {
       kc = getConsumer(rc);
     } catch (MissingParameterException e) {
-      rc.response().setStatusCode(500).end(e.getMessage());
+      rc.response().setStatusCode(400).end(e.getMessage());
       return;
     }
 
@@ -193,7 +215,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     KafkaConsumer<String,String> kc = consumers.get(topic);
     if (kc == null)
     {
-      Properties props = new Properties(baseConsumerProperties);
+      Properties props = new Properties(consumerProps);
       props.put("group.id", topic);
       kc = new KafkaConsumer<String, String>(props);
       kc.subscribe(Arrays.asList(topic));
