@@ -1,4 +1,4 @@
-package com.github.wlaforest.KafkaEventService;
+package com.github.wlaforest.kes;
 
 
 import io.vertx.core.AbstractVerticle;
@@ -16,7 +16,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.serialization.StringDeserializer;
 
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Properties;
 
