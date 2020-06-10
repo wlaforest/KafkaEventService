@@ -1,4 +1,4 @@
-package com.github.wlaforest.KafkaEventService;
+package com.github.wlaforest.kes;
 
 import io.vertx.core.Vertx;
 import io.vertx.junit5.VertxExtension;
