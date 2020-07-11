@@ -35,12 +35,14 @@ public class KafkaEventVerticle extends AbstractVerticle  {
   private final static String RESPONSE_BODY_END =
       "]}";
   private final static long POLL_TIMEOUT = 100;
+  public static final int DEFAULT_SSE_TIMER = 1000;
+
   public static final String LOGGER = "kes";
   public static final String TOPIC_PARAM = "topic";
   public static final String PERIOD_PARAM = "period";
   public static final String JSON_SYNCH_PATH_PARAM = "jsonSyncPath";
   public static final String SYNCH_FACTOR_PARAM = "syncFactor";
-  public static final int DEFAULT_SSE_TIMER = 1000;
+  private static final String REQUEST_ID_PARAM = "requestId";
 
   private final HashMap<String, KafkaConsumer<String, String>> consumers = new HashMap();
   private  KafkaProducer<String, String> kafkaProducer;
@@ -48,11 +50,8 @@ public class KafkaEventVerticle extends AbstractVerticle  {
   private Properties consumerProps;
   private Properties producerProps;
 
-  private String schemaRegistryURL;
-
   @Override
   public void start(Promise<Void> startPromise) throws Exception {
-    String schemaRegistryUrl = config().getString("kafkaevent.schemaregistry.address", "localhost:8081");
     String bootstrapServers = config().getString("kafkaevent.source.broker.address", "localhost:9092");
 
     consumerProps = new Properties();
@@ -213,18 +212,22 @@ public class KafkaEventVerticle extends AbstractVerticle  {
       throw new MissingParameterException("Missing topic parameter");
     }
 
-    KafkaConsumer<String,String> kc = consumers.get(topic);
+    String requestId = rc.request().getParam(REQUEST_ID_PARAM);
+    requestId = (requestId != null)  ? requestId : "";
+    String consumerGroup = topic + requestId;
+
+    KafkaConsumer<String,String> kc = consumers.get(consumerGroup);
     if (kc == null)
     {
-      Logger.getLogger(LOGGER).log(Level.INFO, "No consumer for topic " + topic + ". Creating new one");
+      Logger.getLogger(LOGGER).log(Level.INFO, "No consumer for group " + consumerGroup + ". Creating new one");
 
       Properties props = new Properties();
       props.putAll(consumerProps);
-      props.put("group.id", "kes-" + topic);
+      props.put("group.id", "kes-" + consumerGroup);
       kc = new KafkaConsumer<String, String>(props);
 
       kc.subscribe(Arrays.asList(topic));
-      consumers.put(topic, kc);
+      consumers.put(consumerGroup, kc);
       return kc;
     }
     else return kc;
@@ -235,6 +238,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     String timerParam = rc.request().getParam(PERIOD_PARAM);
     String jsonSynchPath = rc.request().getParam(JSON_SYNCH_PATH_PARAM);
     String syncFactorParam = rc.request().getParam(SYNCH_FACTOR_PARAM);
+
 
     int timer = DEFAULT_SSE_TIMER;
     float syncFactor = 1;
