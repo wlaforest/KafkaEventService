@@ -15,6 +15,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.protocol.types.Field;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
@@ -43,6 +44,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
   public static final String JSON_SYNCH_PATH_PARAM = "jsonSyncPath";
   public static final String SYNCH_FACTOR_PARAM = "syncFactor";
   private static final String REQUEST_ID_PARAM = "requestId";
+  private static final String RETURN_ALL_PARAM = "returnAll";
 
   private final HashMap<String, KafkaConsumer<String, String>> consumers = new HashMap();
   private  KafkaProducer<String, String> kafkaProducer;
@@ -238,16 +240,22 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     String timerParam = rc.request().getParam(PERIOD_PARAM);
     String jsonSynchPath = rc.request().getParam(JSON_SYNCH_PATH_PARAM);
     String syncFactorParam = rc.request().getParam(SYNCH_FACTOR_PARAM);
-
+    String returnAllParam =  rc.request().getParam(RETURN_ALL_PARAM);
 
     int timer = DEFAULT_SSE_TIMER;
     float syncFactor = 1;
+    boolean returnAll;
 
     if (timerParam != null)
       timer = Integer.parseInt(timerParam);
 
     if (syncFactorParam != null)
       syncFactor = Float.parseFloat(syncFactorParam);
+
+    if (returnAllParam != null)
+      returnAll = Boolean.parseBoolean(returnAllParam);
+    else
+      returnAll = true;
 
     String topic = rc.request().getParam(TOPIC_PARAM);
     Logger.getLogger(LOGGER).log(Level.INFO, "In sseTopicMessages for topic: " + topic +
@@ -268,7 +276,9 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     response.putHeader("Connection", "keep-alive");
     response.putHeader("Cache-Control", "no-cache");
 
-    vertx.setPeriodic(timer, new PollTimerHandler(kc, rc.response(), jsonSynchPath, syncFactor, timer));
+    vertx.setPeriodic(timer,
+            new PollTimerHandler(kc, rc.response(), jsonSynchPath, syncFactor,
+                    timer, returnAll, topic));
   }
 
 
@@ -283,6 +293,7 @@ public class KafkaEventVerticle extends AbstractVerticle  {
     private long startTime = -1;
     private long pollInterval = -1;
     private long delta = -1;
+    private boolean returnAll = true;
 
     private final KafkaConsumer kc;
     private final HttpServerResponse response;
@@ -292,16 +303,19 @@ public class KafkaEventVerticle extends AbstractVerticle  {
 
     private ConsumerRecord<String, String> currentRecord;
     private Long currentRecordTime;
+    private String topic;
 
     private Iterator<ConsumerRecord<String,String>> currentIterator;
 
     public PollTimerHandler(KafkaConsumer kc, HttpServerResponse response, String jsonSyncPath, float syncFactor,
-                            int pollInterval) {
+                            int pollInterval, boolean returnAll, String topic) {
+      this.topic = topic;
       this.kc = kc;
       this.response = response;
       this.jsonSyncPath = jsonSyncPath;
       this.timeSyncFactor = syncFactor;
       this.pollInterval = pollInterval;
+      this.returnAll = returnAll;
     }
 
     @Override
@@ -309,15 +323,10 @@ public class KafkaEventVerticle extends AbstractVerticle  {
       Logger logger = Logger.getLogger(LOGGER);
 
       while (moreRecords()) {
-        String recordValue = currentRecord.value();
-
         // Check to see if there is a jsonSyncPath that instructs what field in the data to sync to
         // If not we will just send the next one and wait for the next call
-        if (jsonSyncPath == null) {
-          sendRecord();
-          return;
-        } else {
-
+        if (jsonSyncPath != null) {
+          String recordValue = currentRecord.value();
           double timeValue = JsonUtils.jsonPathDouble(recordValue, jsonSyncPath);
           Double scaledValue = timeValue * timeSyncFactor;
           currentRecordTime = scaledValue.longValue();
@@ -338,6 +347,16 @@ public class KafkaEventVerticle extends AbstractVerticle  {
           else
             return;
         }
+        // If return all then we want to return as much as the stream has available
+        else if (returnAll)
+          sendRecord();
+
+        // Not return all so we should just return one.  Good for simulating somehting with a demo
+        else {
+          sendRecord();
+          return;
+        }
+
       }
     }
 
@@ -354,17 +373,16 @@ public class KafkaEventVerticle extends AbstractVerticle  {
       if (currentRecord == null && (currentIterator == null || !currentIterator.hasNext()))
       {
         ConsumerRecords<String, String> polledRecords = kc.poll(100);
-        logger.log(Level.INFO,"polled and got back " + polledRecords.count());
+        logger.log(Level.INFO,"for topics " +topic+ " polled and got back " + polledRecords.count());
 
         // No records available to to send back.  Null everything out and return
         if (polledRecords.count() < 1)
         {
-          logger.log(Level.INFO, "No records returned.  Exiting");
           currentIterator = null;
           return false;
         }
 
-        logger.log(Level.INFO, "Getting records iterator");
+        logger.log(Level.FINE, "Getting records iterator");
         currentIterator = polledRecords.iterator();
         currentRecord = currentIterator.next();
         return true;
@@ -376,5 +394,4 @@ public class KafkaEventVerticle extends AbstractVerticle  {
       }
     }
   }
-
 }
